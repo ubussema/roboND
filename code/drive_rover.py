@@ -1,4 +1,6 @@
 # Do the necessary imports
+# filter map images by pitch and roll
+# soft accelerating and steering.
 import argparse
 import shutil
 import base64
@@ -51,17 +53,43 @@ class RoverState():
         self.brake = 0 # Current brake value
         self.nav_angles = None # Angles of navigable terrain pixels
         self.nav_dists = None # Distances of navigable terrain pixels
+        self.wall_left = 0 # Distance to the left wall at defined distance ahead the rover
+        self.wall_right = 0 # Distance to the right wall at defined distance ahead the rover.
+        self.navAhead = 0 #distance of navigable terrain ahead (at angle zero)
         self.ground_truth = ground_truth_3d # Ground truth worldmap
-        self.mode = 'forward' # Current mode (can be forward or stop)
+        self.mode = 'findwall' # Current mode (can be forward or stop or findwall or unblocking)
         self.throttle_set = 0.2 # Throttle setting when accelerating
         self.brake_set = 10 # Brake setting when braking
+        # stuck detect
+        self.sd_state = 'normal' #state of rover for stuck detection. can be "normal", "wait" or "stuck".
+        self.sd_timer = None #timer for stuck detect
+        self.sd_time = 2 #time interval for stuck detection
+        #unblocking
+        self.ub_state = 'init' #state for unblock turning. can be 'init', 'turn' or 'go'
+        self.ub_timer = None #timer for unblocking
+        self.ub_time = 2 #time to go forward for unblocking.
+        self.ub_yaw = None #yaw angle when unblocking turn starts.
+        self.ub_minYaw = 15 #[deg] rover will turn minYaw before accelerating to get free. obsolete
+        self.ub_turn_time = 1 #turning time to get free.
         # The stop_forward and go_forward fields below represent total count
         # of navigable terrain pixels.  This is a very crude form of knowing
         # when you can keep going and when you should stop.  Feel free to
         # get creative in adding new fields or modifying these!
-        self.stop_forward = 50 # Threshold to initiate stopping
-        self.go_forward = 500 # Threshold to go forward again
+        self.stop_forward = 50 # Threshold to initiate stopping (obsolete)
+        self.go_forward = 500 # Threshold to go forward again (obsolete)
+        self.stop_dist = 20 # distance to stop going forward
+        self.go_dist = 30 #distance to start going forward
+        self.min_vel = 0.2 #velocity when assuming that the rover actually moves
         self.max_vel = 2 # Maximum velocity (meters/second)
+        self.highestVel = 5 # highest allowed speed for dynamic speed
+        self.longestSight = 80 # sight distance at which highestVel is given.
+        self.lookahead =  15# distance to look ahead for walls. Caution: ".starwallfollow" depends on this...
+        self.minWallDist = 10
+        self.maxWallDist = 12
+        self.startWallFollow = 17 # when a wall is seen <= this distance, start following it. This value depends on ".lookahead"
+        self.maxPitchD = 1 # max Delta for Pitch when recording map data
+        self.maxRollD = .5 # max Delta for Roll when recording map data.
+        self.maxYawD = 1 # max Delta for Yaw when recording map data.
         # Image output from perception step
         # Update this image to display your intermediate analysis steps
         # on screen in autonomous mode

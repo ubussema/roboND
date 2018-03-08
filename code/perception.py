@@ -1,5 +1,6 @@
 import numpy as np
 import cv2
+import time
 
 # Identify pixels above the threshold
 # Threshold of RGB > 160 does a nice job of identifying ground pixels only
@@ -35,6 +36,35 @@ def rover_coords(binary_img):
     x_pixel = -(ypos - binary_img.shape[0]).astype(np.float)
     y_pixel = -(xpos - binary_img.shape[1]/2 ).astype(np.float)
     return x_pixel, y_pixel
+
+def wall_dist(dxpixel, dypixel,x_ahead):
+    # determine distance to wall, based on rover_coords in a distance of x_ahead ahead the rover
+    
+    #create mask for all elements that are between x_ahead[0] and x_ahead[1] ahead the rover.
+    #idxAtXDist = [(el>=x_ahead[0]) and (el<=x_ahead[1]) for el in dxpixel] 
+    try:
+        idxAtXDist = [(el==x_ahead) for el in dxpixel] 
+        #find all y elements that are x ahead the rover
+        yAtDist = dypixel[idxAtXDist]
+    
+        dist_right = np.amin(yAtDist) #navigable element most to the right
+        dist_left = np.amax(yAtDist)  #navigable element most to the left
+    except: #in case there is no navigable terrain at x_ahead
+        dist_right = 0
+        dist_left = 0
+    return dist_left, dist_right 
+
+def sense_ahead(dist, angles, sense_angle=0):
+    # returns the max distance at sense_angle from rover perspective
+    try:
+        #create mask for angles that are equal to sense_angle
+        idxAtSense_angle =[el==sense_angle for el in angles]
+        distAtSense_angle = dist[idxAtSense_angle]
+        distAhead = np.amax(distAtSense_angle)
+    except:
+        distAhead = 0
+    return distAhead
+	
 
 
 # Define a function to convert to radial coords in rover space
@@ -85,6 +115,11 @@ def perspect_transform(img, src, dst):
     warped = cv2.warpPerspective(img, M, (img.shape[1], img.shape[0]))# keep same size as input image
     
     return warped
+
+def isInsideAngle(testangle,delta):
+    # tests if `testangle` is within `delta` around zero degrees
+    ret = abs(testangle-testangle//180*360)<delta
+    return ret
 
 
 # Apply the above functions in succession and update the Rover state accordingly
@@ -155,11 +190,11 @@ def perception_step(Rover):
         #          Rover.vision_image[:,:,1] = rock_sample color-thresholded binary image
         #          Rover.vision_image[:,:,2] = navigable terrain color-thresholded binary image
 
-    #Rover.vision_image[:,:,0] = obst_thres
-    #Rover.vision_image[:,:,1] = rock_thres
-    #Rover.vision_image[:,:,2] = nav_thres
-    Rover.vision_image[:,:,0] = np.ones_like(obst_thres)
-    Rover.vision_image[:,:,1] = np.zeros_like(rock_thres)
+    Rover.vision_image[:,:,0] = obst_thres
+    Rover.vision_image[:,:,1] = rock_thres
+    Rover.vision_image[:,:,2] = nav_thres
+    #Rover.vision_image[:,:,0] = np.ones_like(obst_thres)
+    #Rover.vision_image[:,:,1] = np.zeros_like(rock_thres)
     #Rover.vision_image[:,:,2] = nav_thres
 
     
@@ -181,9 +216,11 @@ def perception_step(Rover):
         # Example: Rover.worldmap[obstacle_y_world, obstacle_x_world, 0] += 1
         #          Rover.worldmap[rock_y_world, rock_x_world, 1] += 1
         #          Rover.worldmap[navigable_y_world, navigable_x_world, 2] += 1
-    Rover.worldmap[obstacle_y_world, obstacle_x_world, 0] += 1
-    Rover.worldmap[rock_y_world, rock_x_world, 1] += 1
-    Rover.worldmap[navigable_y_world, navigable_x_world, 2] += 1
+    #this only happens when the rover is not too much tilted.   
+    if (isInsideAngle(Rover.pitch,Rover.maxPitchD) and isInsideAngle(Rover.roll,Rover.maxRollD)):
+        Rover.worldmap[obstacle_y_world, obstacle_x_world, 0] += 1
+        Rover.worldmap[rock_y_world, rock_x_world, 1] += 1
+        Rover.worldmap[navigable_y_world, navigable_x_world, 2] += 1
 
     # 8) Convert rover-centric pixel positions to polar coordinates
     # Update Rover pixel distances and angles
@@ -191,6 +228,33 @@ def perception_step(Rover):
         # Rover.nav_angles = rover_centric_angles
 		# dist, angles = to_polar_coords(x_pixel, y_pixel)
     Rover.nav_dists, Rover.nav_angles = to_polar_coords(navX, navY)
+    # Update Rover wall distances
+    Rover.wall_left, Rover.wall_right = wall_dist(navX, navY, Rover.lookahead)
+    # print("Wall left: "+str(Rover.wall_left)+" Wall right: "+str(Rover.wall_right))
+    Rover.navAhead = sense_ahead(Rover.nav_dists, Rover.nav_angles)
     
-    
+    #stuck detection
+    if Rover.sd_state == 'normal':
+        if ((Rover.vel < Rover.min_vel) and (Rover.throttle > 0)):
+            Rover.sd_timer = time.time() #reset timer
+            Rover.sd_state = 'wait'
+        else:
+            Rover.sd_state = 'normal'
+    elif Rover.sd_state == 'wait':
+        if((Rover.vel < Rover.min_vel) and (Rover.throttle > 0) and (time.time())>(Rover.sd_timer+Rover.sd_time)):
+            Rover.sd_state = 'stuck'
+            #Rover.mode = 'unblocking'
+        elif ((Rover.vel >= Rover.min_vel) or (Rover.throttle == 0)):
+            Rover.sd_state = 'normal'
+        else:
+            Rover.sd_state = 'wait'
+    elif Rover.sd_state == 'stuck':
+        if (Rover.vel >= Rover.min_vel):
+            Rover.sd_state = 'normal'
+        else:
+            Rover.sd_state = 'stuck'
+    else:
+        Rover.sd_state = 'normal'
+
+    print("Rover.sd_state: "+str(Rover.sd_state))   #debug      
     return Rover
